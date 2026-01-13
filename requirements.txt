@@ -1,5 +1,7 @@
 streamlit
 yfinance
 pandas
+finance-datareader
 matplotlib
 koreanize-matplotlib
+plotly
