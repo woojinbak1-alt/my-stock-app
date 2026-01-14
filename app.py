@@ -2,17 +2,17 @@ import streamlit as st
 import yfinance as yf
 import pandas as pd
 import FinanceDataReader as fdr
-import plotly.graph_objects as go # 반응형 차트 라이브러리
+import plotly.graph_objects as go 
 from datetime import datetime, timedelta
 import numpy as np
 
 # ---------------------------------------------------------
-# 1. 페이지 설정 (모바일 맞춤형)
+# 1. 페이지 설정
 # ---------------------------------------------------------
 st.set_page_config(
     page_title="내 자산 시뮬레이터",
     layout="wide",
-    initial_sidebar_state="collapsed" # 모바일에선 사이드바 닫고 시작 (화면 넓게 쓰기 위함)
+    initial_sidebar_state="collapsed" 
 )
 
 # ---------------------------------------------------------
@@ -30,7 +30,10 @@ def get_krx_dict():
             if market == 'KOSPI': yf_code = code + ".KS"
             elif market == 'KOSDAQ': yf_code = code + ".KQ"
             else: yf_code = code + ".KS"
+            
+            # 검색 정확도를 위해 띄어쓰기 제거 버전도 저장
             stock_dict[name] = yf_code
+            stock_dict[name.replace(" ", "").upper()] = yf_code
         return stock_dict
     except:
         return {}
@@ -44,20 +47,44 @@ st.sidebar.header("⚙️ 시뮬레이션 설정")
 
 def search_ticker(user_input):
     key = user_input.strip()
-    key_upper = key.upper().replace(" ", "")
+    key_upper = key.upper().replace(" ", "") # 대문자, 공백제거
+    
+    # [1] 가상 모델
     if "498400" in key_upper or "CC" == key_upper: return "CC", "KODEX 위클리CC(가상)"
+    
+    # [2] ★ 수동 매핑 추가 (검색 안 되는 것들 강제 연결) ★
     manual_map = {
         "S&P500": "SPY", "나스닥": "QQQ", "달러": "KRW=X",
-        "애플": "AAPL", "테슬라": "TSLA", "엔비디아": "NVDA", "비트코인": "BTC-USD"
+        "애플": "AAPL", "테슬라": "TSLA", "엔비디아": "NVDA", "비트코인": "BTC-USD",
+        # 골드선물 강제 추가
+        "골드선물": "132030.KS", "KODEX골드선물": "132030.KS", "KODEX골드선물(H)": "132030.KS",
+        "금": "132030.KS", "골드": "132030.KS"
     }
-    if key_upper in manual_map: return manual_map[key_upper], manual_map[key_upper]
-    if key in krx_full_dict: return krx_full_dict[key], key
-    for name, code in krx_full_dict.items():
-        if key_upper in name.replace(" ", "").upper(): return code, name
+    
+    # 입력값이 수동 맵에 있으면 바로 반환
+    if key_upper in manual_map: return manual_map[key_upper], key
+    # '골드선물'이 포함되어 있으면 강제 연결
+    if "골드선물" in key_upper: return "132030.KS", "KODEX 골드선물(H)"
+
+    # [3] 종목코드 6자리 직접 입력 시 (예: 132030)
+    if key.isdigit() and len(key) == 6:
+        return f"{key}.KS", f"종목코드 {key}"
+
+    # [4] 한국 주식 찾기 (스마트 검색)
+    # DB에서 정확히 일치하는 키 찾기
+    if key_upper in krx_full_dict: return krx_full_dict[key_upper], key
+    
+    # 포함 검색 (입력한 단어가 종목명에 들어있는지)
+    for name_key, code_val in krx_full_dict.items():
+        if key_upper in name_key: 
+            return code_val, name_key # 찾았다!
+            
     return key_upper, key_upper
 
+# 입력창
 input_a_raw = st.sidebar.text_input("🔴 A팀 (예: TIGER 미국나스닥)", value="S&P500")
-input_b_raw = st.sidebar.text_input("🔵 B팀 (예: 삼성전자)", value="KODEX 골드선물(H)")
+# 기본값을 골드선물로 바꿔두었습니다 확인해보세요
+input_b_raw = st.sidebar.text_input("🔵 B팀 (예: 삼성전자)", value="골드선물")
 
 code_a, name_a = search_ticker(input_a_raw)
 code_b, name_b = search_ticker(input_b_raw)
@@ -105,6 +132,7 @@ def get_data_safe(t_a, t_b, yrs):
             val = 10000 * (1 + ret.apply(lambda r: (0.005+daily_prem) if r > 0.005 else (r+daily_prem))).cumprod()
             return val
         else:
+            # 야후 파이낸스 다운로드
             df = yf.download(code, start=start, end=end, progress=False, auto_adjust=True)
             if df.empty: return None
             if isinstance(df.columns, pd.MultiIndex):
@@ -120,6 +148,8 @@ def get_data_safe(t_a, t_b, yrs):
 
     start_a = s_a.first_valid_index()
     start_b = s_b.first_valid_index()
+    if start_a is None or start_b is None: return None, "데이터 기간 오류"
+    
     real_start = max(start_a, start_b)
     
     data = data.loc[real_start:]
@@ -190,7 +220,7 @@ def run_simulation(df, asset_col, asset_name, init_krw, monthly_krw):
     return total_invested, hist_dca, hist_bot
 
 # ---------------------------------------------------------
-# 6. 메인 화면 (모바일 친화적 UI)
+# 6. 메인 화면
 # ---------------------------------------------------------
 st.markdown("### 📱 내 손안의 자산 시뮬레이터")
 st.markdown("""
@@ -205,7 +235,7 @@ st.markdown("""
 </style>
 <div class='mobile-tip'>
     👈 <b>종목을 바꾸고 싶다면?</b><br>
-    왼쪽 상단 <b>화살표(>)</b>를 눌러 사이드바를 열어주세요.
+    왼쪽 상단 <b>화살표(>)</b>를 눌러 메뉴를 열어보세요.
 </div>
 """, unsafe_allow_html=True)
 
@@ -214,13 +244,14 @@ with st.spinner('데이터 불러오는 중...'):
     
     if data is None:
         st.error(f"⚠️ {status}")
+        st.info(f"검색어 '{input_b_raw}'(이)가 정확하지 않을 수 있습니다. 종목코드 6자리(예: 132030)를 입력해보세요.")
     else:
         real_start = data.index[0]
         real_years = round((datetime.now() - real_start).days / 365, 1)
         start_str = real_start.strftime("%Y.%m.%d")
         
         if real_years < (years - 1):
-            st.warning(f"⚠️ **기간 알림:** 상장일({start_str}) 이후 **{real_years}년** 데이터만 분석됨")
+            st.warning(f"⚠️ **기간 알림:** 상장일({start_str})이 늦어 **{real_years}년**치만 분석했습니다.")
         else:
             st.success(f"📅 분석 기간: {start_str} ~ 현재 ({real_years}년)")
             
@@ -230,14 +261,12 @@ with st.spinner('데이터 불러오는 중...'):
         inv_a, dca_a, bot_a = run_simulation(data, 'ASSET_A', name_a, ik, mk)
         inv_b, dca_b, bot_b = run_simulation(data, 'ASSET_B', name_b, ik, mk)
         
-        # 1. 결과 요약 카드 (모바일에서 보기 좋게 굵게)
         st.markdown(f"#### 📊 최종 평가 금액")
         col1, col2 = st.columns(2)
         
         def show(label, final, base):
             p = final - base
             r = (p/base)*100
-            color = "red" if p > 0 else "blue"
             return f"**{label}**", f"{int(final/10000):,}만원", f"{r:.1f}%"
 
         with col1:
@@ -254,26 +283,20 @@ with st.spinner('데이터 불러오는 중...'):
             l, v, d = show("AI매매", bot_b[-1], inv_b)
             st.metric(l, v, d)
             
-        # 2. 반응형 차트 (Plotly)
         st.markdown("---")
-        st.markdown("#### 📈 자산 성장 그래프 (터치해보세요)")
+        st.markdown("#### 📈 자산 성장 그래프 (터치 가능)")
         
         fig = go.Figure()
-        
-        # A팀 그래프
         fig.add_trace(go.Scatter(x=data.index, y=dca_a, mode='lines', name=f'{name_a} (존버)', line=dict(color='#FF4B4B', width=2)))
         fig.add_trace(go.Scatter(x=data.index, y=bot_a, mode='lines', name=f'{name_a} (AI)', line=dict(color='#FF4B4B', width=2, dash='dot')))
-        
-        # B팀 그래프
         fig.add_trace(go.Scatter(x=data.index, y=dca_b, mode='lines', name=f'{name_b} (존버)', line=dict(color='#1C83E1', width=2)))
         fig.add_trace(go.Scatter(x=data.index, y=bot_b, mode='lines', name=f'{name_b} (AI)', line=dict(color='#1C83E1', width=2, dash='dot')))
         
         fig.update_layout(
-            height=500, # 모바일 높이 적절하게
-            margin=dict(l=10, r=10, t=30, b=30), # 여백 최소화
-            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1), # 범례 위로
-            hovermode="x unified", # 터치 시 모든 값 표시
-            yaxis_tickformat=',', # 천단위 콤마
+            height=500,
+            margin=dict(l=10, r=10, t=30, b=30),
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+            hovermode="x unified",
+            yaxis_tickformat=',',
         )
-        
         st.plotly_chart(fig, use_container_width=True)
