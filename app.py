@@ -2,7 +2,7 @@ import streamlit as st
 import yfinance as yf
 import pandas as pd
 import FinanceDataReader as fdr
-import plotly.graph_objects as go 
+import plotly.graph_objects as go
 from datetime import datetime, timedelta
 import numpy as np
 
@@ -12,7 +12,7 @@ import numpy as np
 st.set_page_config(
     page_title="내 자산 시뮬레이터",
     layout="wide",
-    initial_sidebar_state="collapsed" 
+    initial_sidebar_state="collapsed"
 )
 
 # ---------------------------------------------------------
@@ -25,8 +25,9 @@ def get_krx_dict():
         stock_dict = {}
         for index, row in df_krx.iterrows():
             name = row['Name']
-            code = row['Code']
+            code = str(row['Code'])
             market = row['Market']
+            
             if market == 'KOSPI': yf_code = code + ".KS"
             elif market == 'KOSDAQ': yf_code = code + ".KQ"
             else: yf_code = code + ".KS"
@@ -83,7 +84,6 @@ def search_ticker(user_input):
 
 # 입력창
 input_a_raw = st.sidebar.text_input("🔴 A팀 (예: TIGER 미국나스닥)", value="S&P500")
-# 기본값을 골드선물로 바꿔두었습니다 확인해보세요
 input_b_raw = st.sidebar.text_input("🔵 B팀 (예: 삼성전자)", value="골드선물")
 
 code_a, name_a = search_ticker(input_a_raw)
@@ -105,11 +105,14 @@ def get_data_safe(t_a, t_b, yrs):
     
     data = pd.DataFrame()
     try:
-        spy = yf.download("SPY", start=start, end=end, progress=False, auto_adjust=True)
-        vix = yf.download("^VIX", start=start, end=end, progress=False, auto_adjust=True)
-        krw = yf.download("KRW=X", start=start, end=end, progress=False, auto_adjust=True)
+        # yfinance 다운로드 옵션 강화 (threads=False)
+        spy = yf.download("SPY", start=start, end=end, progress=False, auto_adjust=True, threads=False)
+        vix = yf.download("^VIX", start=start, end=end, progress=False, auto_adjust=True, threads=False)
+        krw = yf.download("KRW=X", start=start, end=end, progress=False, auto_adjust=True, threads=False)
         
-        if spy.empty: return None, "시장 데이터 로드 실패"
+        if spy.empty: return None, "시장 데이터(S&P500) 로드 실패. 잠시 후 다시 시도해주세요."
+        
+        # MultiIndex 처리
         if isinstance(spy.columns, pd.MultiIndex): spy = spy.xs('SPY', axis=1, level=1)
         if isinstance(vix.columns, pd.MultiIndex): vix = vix.xs('^VIX', axis=1, level=1)
         if isinstance(krw.columns, pd.MultiIndex): krw = krw.xs('KRW=X', axis=1, level=1)
@@ -121,7 +124,7 @@ def get_data_safe(t_a, t_b, yrs):
 
     raw_kospi = None
     if t_a == "CC" or t_b == "CC":
-        k = yf.download("^KS11", start=start, end=end, progress=False, auto_adjust=True)
+        k = yf.download("^KS11", start=start, end=end, progress=False, auto_adjust=True, threads=False)
         if isinstance(k.columns, pd.MultiIndex): k = k.xs('^KS11', axis=1, level=1)
         raw_kospi = k['Close'].reindex(data.index).ffill()
 
@@ -133,7 +136,7 @@ def get_data_safe(t_a, t_b, yrs):
             return val
         else:
             # 야후 파이낸스 다운로드
-            df = yf.download(code, start=start, end=end, progress=False, auto_adjust=True)
+            df = yf.download(code, start=start, end=end, progress=False, auto_adjust=True, threads=False)
             if df.empty: return None
             if isinstance(df.columns, pd.MultiIndex):
                 try: df = df.xs(code, axis=1, level=1)
@@ -143,15 +146,16 @@ def get_data_safe(t_a, t_b, yrs):
     s_a = get_asset(t_a, raw_kospi)
     s_b = get_asset(t_b, raw_kospi)
 
-    if s_a is None: return None, f"'{t_a}' 데이터 없음"
-    if s_b is None: return None, f"'{t_b}' 데이터 없음"
+    if s_a is None: return None, f"'{t_a}' 데이터 없음 (종목코드를 확인하세요)"
+    if s_b is None: return None, f"'{t_b}' 데이터 없음 (종목코드를 확인하세요)"
 
     start_a = s_a.first_valid_index()
     start_b = s_b.first_valid_index()
-    if start_a is None or start_b is None: return None, "데이터 기간 오류"
+    if start_a is None or start_b is None: return None, "데이터 기간 오류 (데이터가 너무 짧습니다)"
     
     real_start = max(start_a, start_b)
     
+    # 인덱스 정렬 및 병합
     data = data.loc[real_start:]
     data['ASSET_A'] = s_a.loc[real_start:].reindex(data.index).ffill()
     data['ASSET_B'] = s_b.loc[real_start:].reindex(data.index).ffill()
@@ -164,6 +168,8 @@ def get_data_safe(t_a, t_b, yrs):
 def run_simulation(df, asset_col, asset_name, init_krw, monthly_krw):
     is_krw = (".KS" in asset_name or ".KQ" in asset_name or "CC" in asset_name)
     start_rate = df['USD_KRW'].iloc[0]
+    
+    # 초기값 세팅
     if is_krw:
         dca_shares = init_krw / df[asset_col].iloc[0]
         bot_cash = init_krw
@@ -176,22 +182,28 @@ def run_simulation(df, asset_col, asset_name, init_krw, monthly_krw):
     hist_dca = []
     hist_bot = []
     
+    # 지표 계산
     df['MA125'] = df['SP500'].rolling(125).mean()
     df['Score_Mom'] = np.where(df['SP500'] > df['MA125'], 100, 0)
     df['MA50_VIX'] = df['VIX'].rolling(50).mean()
     df['Score_Vol'] = np.where(df['VIX'] < df['MA50_VIX'], 100, 0)
+    
     delta = df['SP500'].diff(1)
     gain = delta.where(delta > 0, 0).ewm(com=13).mean()
     loss = -delta.where(delta < 0, 0).ewm(com=13).mean()
     rs = gain / loss
     df['RSI'] = 100 - (100 / (1 + rs))
+    
     df['FNG'] = ((df['Score_Mom']*0.3) + (df['Score_Vol']*0.3) + (df['RSI']*0.4)).rolling(5).mean().clip(0, 100)
     
     prev_month = df.index[0].month
+    
     for date, row in df.iterrows():
         price = row[asset_col]
         rate = row['USD_KRW']
         fng = row['FNG']
+        
+        # 월 적립 (매월 바뀌는 시점)
         if date.month != prev_month:
             total_invested += monthly_krw
             if is_krw:
@@ -202,6 +214,8 @@ def run_simulation(df, asset_col, asset_name, init_krw, monthly_krw):
                 dca_shares += monthly_usd / price
                 bot_cash += monthly_usd
             prev_month = date.month
+            
+        # 매매 로직 (공포탐욕지수 기반)
         if fng <= 20 and bot_cash > 0:
             shares = bot_cash / price
             bot_shares += shares
@@ -210,6 +224,8 @@ def run_simulation(df, asset_col, asset_name, init_krw, monthly_krw):
             cash = bot_shares * price
             bot_cash += cash
             bot_shares = 0
+            
+        # 자산 가치 기록
         if is_krw:
             hist_dca.append(dca_shares * price)
             hist_bot.append((bot_shares * price) + bot_cash)
