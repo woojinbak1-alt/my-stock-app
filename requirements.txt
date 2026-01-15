@@ -1,7 +1,9 @@
 streamlit
-yfinance
+yfinance>=0.2.40
 pandas
 finance-datareader
-matplotlib
-koreanize-matplotlib
 plotly
+lxml
+beautifulsoup4
+requests
+numpy
